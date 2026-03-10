@@ -73,10 +73,23 @@ class ViewController: UIViewController, UITableViewDelegate, UITableViewDataSour
     // MARK: - User defined methods
     
     func syncUD() {
-        //save blocklist in userdefaults
+        // 保存黑名单到 UserDefaults (App Group)
         appDelegate.updateBlockedContactsList(contacts: self.blockList)
-        //reload extension to update blocklist entries
-        CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: "com.bcs.incomingBlocker.CallDirectoryHandler", completionHandler: nil)
+        
+        // 获取当前 App 的 Bundle ID 并尝试拼接 Extension 的 ID
+        let mainBundleId = Bundle.main.bundleIdentifier ?? "com.bcs.incomingBlocker"
+        let extensionId = "\(mainBundleId).CallDirectoryHandler"
+        
+        print("CallBlocker: Attempting to reload extension: \(extensionId)")
+        
+        // 通知系统刷新拦截规则
+        CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extensionId) { error in
+            if let error = error {
+                print("CallBlocker: Failed to reload extension: \(error.localizedDescription)")
+            } else {
+                print("CallBlocker: Successfully requested extension reload.")
+            }
+        }
     }
     
     // MARK: - Table view delegates & datasources
