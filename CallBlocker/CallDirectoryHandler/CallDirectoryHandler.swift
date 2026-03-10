@@ -8,14 +8,11 @@
 
 import Foundation
 import CallKit
-import Contacts
 
 class CallDirectoryHandler: CXCallDirectoryProvider {
     
     override func beginRequest(with context: CXCallDirectoryExtensionContext) {
         context.delegate = self
-        
-        self.loadContacts()
         
         do {
             try addBlockingPhoneNumbers(to: context)
@@ -39,101 +36,64 @@ class CallDirectoryHandler: CXCallDirectoryProvider {
     }
     
     private func addBlockingPhoneNumbers(to context: CXCallDirectoryExtensionContext) throws {
-        // Retrieve phone numbers to block from data store. For optimal performance and memory usage when there are many phone numbers,
-        // consider only loading a subset of numbers at a given time and using autorelease pool(s) to release objects allocated during each batch of numbers which are loaded.
-        // Numbers must be provided in numerically ascending order.
+        let patterns = self.getBlockedContacts()
+        var allNumbers: Set<Int64> = []
         
-        let phoneNumbers = self.getBlockedContacts()
-        for phoneNumber in phoneNumbers {
-            let phInt = Int64(phoneNumber as String)
-            context.addBlockingEntry(withNextSequentialPhoneNumber: phInt!)
+        for pattern in patterns {
+            let expanded = expandPattern(pattern)
+            allNumbers.formUnion(expanded)
+        }
+        
+        // CallKit 要求号码必须是升序排列
+        let sortedNumbers = allNumbers.sorted()
+        for phoneNumber in sortedNumbers {
+            context.addBlockingEntry(withNextSequentialPhoneNumber: phoneNumber)
         }
     }
     
     private func addIdentificationPhoneNumbers(to context: CXCallDirectoryExtensionContext) throws {
-        // Retrieve phone numbers to identify and their identification labels from data store. For optimal performance and memory usage when there are many phone numbers,
-        // consider only loading a subset of numbers at a given time and using autorelease pool(s) to release objects allocated during each batch of numbers which are loaded.
-        // Numbers must be provided in numerically ascending order.
+        let patterns = self.getBlockedContacts()
+        var allNumbers: Set<Int64> = []
+        
+        for pattern in patterns {
+            let expanded = expandPattern(pattern)
+            allNumbers.formUnion(expanded)
+        }
 
-        let phoneNumbers = self.getBlockedContacts()
-        for phoneNumber in phoneNumbers {
-            let phInt = Int64(phoneNumber as String)
-            context.addIdentificationEntry(withNextSequentialPhoneNumber: phInt!, label: "BCS TEST")
+        let sortedNumbers = allNumbers.sorted()
+        for phoneNumber in sortedNumbers {
+            context.addIdentificationEntry(withNextSequentialPhoneNumber: phoneNumber, label: "已拦截号码")
         }
     }
     
-    func loadContacts() {
+    // 辅助函数：将 "1519650****" 展开为具体数字列表
+    private func expandPattern(_ pattern: String) -> [Int64] {
+        // 移除所有非数字字符（除了 *）
+        var cleanPattern = pattern.replacingOccurrences(of: "+", with: "")
+        cleanPattern = cleanPattern.filter { "0123456789*".contains($0) }
         
-        let blockedContacts = self.getBlockedContacts()
-        if blockedContacts.count > 0 {
-            return
-        }
+        var results: [String] = [cleanPattern]
         
-        let contactStore = CNContactStore()
-        contactStore.requestAccess(for: .contacts, completionHandler: { (granted, error) -> Void in
-            if granted {
-                let predicate = CNContact.predicateForContactsInContainer(withIdentifier: contactStore.defaultContainerIdentifier())
-                var contacts: [CNContact]! = []
-                do {
-                    contacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: [CNContactPhoneNumbersKey as CNKeyDescriptor])
-                    if contacts.count == 0 {
-                        return
+        // 循环替换每个 '*'
+        while let firstStarRange = results.first(where: { $0.contains("*") })?.range(of: "*") {
+            var nextBatch: [String] = []
+            for p in results {
+                if let starRange = p.range(of: "*") {
+                    for i in 0...9 {
+                        let newP = p.replacingCharacters(in: starRange, with: "\(i)")
+                        nextBatch.append(newP)
                     }
-                    
-                    var finalArrayForContacts: [String] = []
-                    for contactTemp in contacts {
-                        let contactNew = contactTemp
-                        var tempArray: [String] = []
-                        if (contactNew.phoneNumbers).count > 0 {
-                            var numArray: [CNLabeledValue<CNPhoneNumber>] = []
-                            numArray = contactNew.phoneNumbers
-                            for cnLblValue in numArray {
-                                let cnPhNum = cnLblValue.value
-                                let tempStr = self.removeFormat(fromMobileNumber: cnPhNum.stringValue)
-                                tempArray.append(tempStr);
-                            }
-                            
-                            for i in 0  ..< tempArray.count {
-                                let phoneNumber : String = tempArray[i]
-                                if phoneNumber.count > 0 {
-                                    let resultString : String = (phoneNumber.components(separatedBy: NSCharacterSet.whitespaces) as NSArray).componentsJoined(by: "")
-                                    finalArrayForContacts.append(resultString)
-                                }
-                            }
-                        }
-                    }
-                    
-                    finalArrayForContacts.sort()
-                    DispatchQueue.main.async {
-                        self.updateBlockedContactsList(contacts: finalArrayForContacts)
-                    }
-                }catch {
-                    print(error)
+                } else {
+                    nextBatch.append(p)
                 }
             }
-        })
-        
-    }
-    
-    func sortArray(arrayToSort: [String])->[String] {
-        let sortedArray = arrayToSort.sorted(by:) {
-            (first, second) in
-            first.compare(second, options: .numeric) == ComparisonResult.orderedAscending
+            results = nextBatch
+            
+            // 安全限制：防止展开过多号码导致扩展崩溃 (最大 10,000 条)
+            if results.count > 10000 { break }
         }
-        print(sortedArray)
-        return sortedArray
-    }
-    
-    func removeFormat(fromMobileNumber num: String) -> String {
-        var mobileNumber: String = num
-        mobileNumber = mobileNumber.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-        mobileNumber = mobileNumber.trimmingCharacters(in: CharacterSet.symbols)
-        mobileNumber = mobileNumber.trimmingCharacters(in: CharacterSet.punctuationCharacters)
-        mobileNumber = mobileNumber.trimmingCharacters(in: CharacterSet.controlCharacters)
-        mobileNumber = mobileNumber.replacingOccurrences(of: "+", with: "")
-        mobileNumber = mobileNumber.replacingOccurrences(of: " ", with: "")
-        mobileNumber = mobileNumber.replacingOccurrences(of: "\u{00a0}", with: "")
-        return mobileNumber
+        
+        return results.compactMap { Int64($0) }
     }
     
     func updateBlockedContactsList(contacts: [String]) {
@@ -146,7 +106,7 @@ class CallDirectoryHandler: CXCallDirectoryProvider {
     func getBlockedContacts() -> [String] {
         let defaults = UserDefaults(suiteName: "group.com.incomingBlocker")
         let blockedContacts = defaults?.value(forKey: "blockList")
-        return blockedContacts as! [String]
+        return (blockedContacts as? [String]) ?? []
     }
     
 }

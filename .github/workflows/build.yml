@@ -1,0 +1,46 @@
+name: Build Unsigned IPA
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: Build Archive (Unsigned)
+      run: |
+        xcodebuild archive \
+          -project CallBlocker/CallBlocker.xcodeproj \
+          -scheme CallBlocker \
+          -configuration Release \
+          -sdk iphoneos \
+          -archivePath build/CallBlocker.xcarchive \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGN_IDENTITY="" \
+          AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+    - name: Package IPA
+      run: |
+        mkdir -p Payload
+        cp -r build/CallBlocker.xcarchive/Products/Applications/CallBlocker.app Payload/
+        zip -r CallBlocker.ipa Payload
+        
+    - name: Upload IPA
+      uses: actions/upload-artifact@v4
+      with:
+        name: CallBlocker-Unsigned
+        path: CallBlocker.ipa
