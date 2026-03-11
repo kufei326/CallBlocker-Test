@@ -14,21 +14,28 @@ class CallDirectoryHandler: CXCallDirectoryProvider {
     override func beginRequest(with context: CXCallDirectoryExtensionContext) {
         context.delegate = self
         
+        // 1. 检查是否为增量更新 (Apple 推荐，但我们目前使用全量更新方案)
+        if context.isIncremental {
+            // 如果是增量更新，我们可以选择只添加差异部分。这里为了简单先强制全量刷新。
+            context.removeAllBlockingEntries()
+            context.removeAllIdentificationEntries()
+        }
+        
         do {
             try addBlockingPhoneNumbers(to: context)
         } catch {
-            NSLog("Unable to add blocking phone numbers")
-            let error = NSError(domain: "CallDirectoryHandler", code: 1, userInfo: nil)
-            context.cancelRequest(withError: error)
+            NSLog("CallBlocker: Error adding blocking entries: \(error)")
+            let err = NSError(domain: "CallDirectoryHandler", code: 1, userInfo: nil)
+            context.cancelRequest(withError: err)
             return
         }
         
         do {
             try addIdentificationPhoneNumbers(to: context)
         } catch {
-            NSLog("Unable to add identification phone numbers")
-            let error = NSError(domain: "CallDirectoryHandler", code: 2, userInfo: nil)
-            context.cancelRequest(withError: error)
+            NSLog("CallBlocker: Error adding identification entries: \(error)")
+            let err = NSError(domain: "CallDirectoryHandler", code: 2, userInfo: nil)
+            context.cancelRequest(withError: err)
             return
         }
         
@@ -37,34 +44,48 @@ class CallDirectoryHandler: CXCallDirectoryProvider {
     
     private func addBlockingPhoneNumbers(to context: CXCallDirectoryExtensionContext) throws {
         let patterns = self.getBlockedContacts()
-        NSLog("CallBlocker: Found \(patterns.count) patterns to block.")
-        
         var allNumbers: Set<Int64> = []
         
-        for pattern in patterns {
-            let expanded = expandPattern(pattern)
-            for num in expanded {
-                allNumbers.insert(num)
+        // 使用 autoreleasepool 处理大批量通配符展开
+        autoreleasepool {
+            for pattern in patterns {
+                let expanded = expandPattern(pattern)
+                allNumbers.formUnion(expanded)
             }
         }
         
-        // CallKit 要求号码必须是升序排列
+        // 必须按数值升序排列
         let sortedNumbers = allNumbers.sorted()
-        NSLog("CallBlocker: Adding \(sortedNumbers.count) total unique numbers to blocking database.")
         
         for phoneNumber in sortedNumbers {
             context.addBlockingEntry(withNextSequentialPhoneNumber: phoneNumber)
         }
+        
+        NSLog("CallBlocker: Successfully added \(sortedNumbers.count) blocking entries.")
     }
     
     private func addIdentificationPhoneNumbers(to context: CXCallDirectoryExtensionContext) throws {
-        // 暂时留空，防止与拦截逻辑冲突。待拦截生效后再添加。
-        NSLog("CallBlocker: Skipping identification for now.")
+        let patterns = self.getBlockedContacts()
+        var allNumbers: Set<Int64> = []
+        
+        autoreleasepool {
+            for pattern in patterns {
+                let expanded = expandPattern(pattern)
+                allNumbers.formUnion(expanded)
+            }
+        }
+
+        let sortedNumbers = allNumbers.sorted()
+        
+        for phoneNumber in sortedNumbers {
+            // 提交识别标签，例如显示为 "自定义拦截"
+            context.addIdentificationEntry(withNextSequentialPhoneNumber: phoneNumber, label: "已拦截号码")
+        }
+        
+        NSLog("CallBlocker: Successfully added \(sortedNumbers.count) identification entries.")
     }
     
-    // 辅助函数：将 "1519650****" 展开为具体数字列表
     private func expandPattern(_ pattern: String) -> [Int64] {
-        // 移除所有非数字字符（除了 *）
         var cleanPattern = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         cleanPattern = cleanPattern.replacingOccurrences(of: "+", with: "")
         cleanPattern = cleanPattern.filter { "0123456789*".contains($0) }
@@ -73,8 +94,7 @@ class CallDirectoryHandler: CXCallDirectoryProvider {
         
         var results: [String] = [cleanPattern]
         
-        // 循环替换每个 '*'
-        while let _ = results.first(where: { $0.contains("*") }) {
+        while results.count > 0 && results.first!.contains("*") {
             var nextBatch: [String] = []
             for p in results {
                 if let starRange = p.range(of: "*") {
@@ -88,9 +108,9 @@ class CallDirectoryHandler: CXCallDirectoryProvider {
             }
             results = nextBatch
             
-            // 安全限制：防止展开过多号码导致扩展崩溃
-            if results.count > 10000 { 
-                NSLog("CallBlocker: Pattern too broad, limiting to 10,000 entries.")
+            // Apple 对内存有限制（一般建议 5MB 以内），通配符不能无限展开
+            if results.count > 20000 { 
+                NSLog("CallBlocker: Warning - Pattern too broad, capped at 20,000")
                 break 
             }
         }
