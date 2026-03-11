@@ -121,7 +121,9 @@ class ViewController: UIViewController, UITableViewDelegate, UITableViewDataSour
                     self.present(alert, animated: true, completion: nil)
                 } else {
                     print("CallBlocker: Successfully requested extension reload.")
-                    // 同步成功无需弹窗，控制台记录即可
+                    let alert = UIAlertController(title: "同步成功", message: "拦截规则已提交给系统，请测试号码是否被拦截。", preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "确定", style: .default, handler: nil))
+                    self.present(alert, animated: true, completion: nil)
                 }
             }
         }

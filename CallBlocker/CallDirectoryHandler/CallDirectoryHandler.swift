@@ -44,7 +44,13 @@ class CallDirectoryHandler: CXCallDirectoryProvider {
     
     private func addBlockingPhoneNumbers(to context: CXCallDirectoryExtensionContext) throws {
         let patterns = self.getBlockedContacts()
+        NSLog("CallBlocker: Extension reading data, count: \(patterns.count)")
+        
         var allNumbers: Set<Int64> = []
+        
+        // --- 强制加入一个硬编码号码用于验证系统拦截是否开启 ---
+        // 这里的号码可以设为您用来拨打测试的号码
+        allNumbers.insert(8615196505644) 
         
         // 使用 autoreleasepool 处理大批量通配符展开
         autoreleasepool {
