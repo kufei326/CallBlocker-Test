@@ -29,6 +29,9 @@ class ViewController: UIViewController, UITableViewDelegate, UITableViewDataSour
         // 从本地存储加载已有的黑名单
         self.blockList = appDelegate.getBlockedContacts().sorted()
         self.tblView.reloadData()
+        
+        // 启动时检查系统开关状态
+        self.checkExtensionStatus()
     }
     
     override func didReceiveMemoryWarning() {
@@ -72,6 +75,32 @@ class ViewController: UIViewController, UITableViewDelegate, UITableViewDataSour
     
     // MARK: - User defined methods
     
+    func checkExtensionStatus() {
+        let mainBundleId = Bundle.main.bundleIdentifier ?? "com.bcs.incomingBlocker"
+        let extensionId = "\(mainBundleId).CallDirectoryHandler"
+        
+        CXCallDirectoryManager.sharedInstance.getEnabledStatusForExtension(withIdentifier: extensionId) { (status, error) in
+            DispatchQueue.main.async {
+                var message = ""
+                switch status {
+                case .enabled:
+                    print("CallBlocker: Extension is ENABLED")
+                    return // 已开启，无需提醒
+                case .disabled:
+                    message = "拦截扩展已禁用，请前往：设置 -> 电话 -> 来电阻止与身份识别 中开启开关。"
+                case .unknown:
+                    message = "无法获取扩展状态，请确认 Bundle ID 是否正确。"
+                @unknown default:
+                    message = "未知的扩展状态。"
+                }
+                
+                let alert = UIAlertController(title: "需要开启权限", message: message, preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "确定", style: .default, handler: nil))
+                self.present(alert, animated: true, completion: nil)
+            }
+        }
+    }
+    
     func syncUD() {
         // 保存黑名单到 UserDefaults (App Group)
         appDelegate.updateBlockedContactsList(contacts: self.blockList)
@@ -84,10 +113,16 @@ class ViewController: UIViewController, UITableViewDelegate, UITableViewDataSour
         
         // 通知系统刷新拦截规则
         CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extensionId) { error in
-            if let error = error {
-                print("CallBlocker: Failed to reload extension: \(error.localizedDescription)")
-            } else {
-                print("CallBlocker: Successfully requested extension reload.")
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("CallBlocker: Failed to reload extension: \(error.localizedDescription)")
+                    let alert = UIAlertController(title: "同步失败", message: "系统拒绝刷新: \(error.localizedDescription)\n请检查 Bundle ID 和 App Group 配置。", preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "好的", style: .default, handler: nil))
+                    self.present(alert, animated: true, completion: nil)
+                } else {
+                    print("CallBlocker: Successfully requested extension reload.")
+                    // 同步成功无需弹窗，控制台记录即可
+                }
             }
         }
     }
